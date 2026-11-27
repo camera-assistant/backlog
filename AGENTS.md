@@ -10,8 +10,8 @@ Read the [architecture](docs/architecture.md) first, then the [plans](docs/plans
 ## Picking up work
 
 1. Find the sub-issue, and read its epic and the plan step it comes from before you write code. The sub-issue names the plan sections it relies on.
-2. The code goes to the repository of its area: `camera-assistant/camera-assistant` for the server (Rust), `camera-assistant/frontend` for the web interface (TypeScript). Follow the `AGENTS.md` of that repository.
-3. The pull request there says `Closes https://github.com/camera-assistant/backlog/issues/<n>`.
+2. The code goes where the plan step says. Camera Assistant's own code lives in `camera-assistant/camera-assistant` (the server, Rust) and `camera-assistant/frontend` (the web interface, TypeScript). Some steps change another project, such as Home Assistant or the Matter Server; the plan names it. Follow the `AGENTS.md` and the contribution rules of the repository you work in.
+3. The pull request links the sub-issue. In the Camera Assistant repositories it says `Closes https://github.com/camera-assistant/backlog/issues/<n>`.
 4. When the plan does not answer a design question, stop and ask the person you work for. Do not decide it silently.
 
 ## The plan format
