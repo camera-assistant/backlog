@@ -3,7 +3,7 @@
 The plan and the backlog of Camera Assistant (a working title), a local recorder for the cameras in your home.
 
 - **Issues** describe the work, one task per issue.
-- **The project board** shows what is open, in progress and done.
+- **The [project board](https://github.com/orgs/camera-assistant/projects/1)** shows what is open, in progress and done.
 
 ## Status
 
