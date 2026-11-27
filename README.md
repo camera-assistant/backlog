@@ -9,7 +9,7 @@ This repository hosts the issues of the [Camera Assistant Project Board](https:/
 
 ## Status
 
-The project has just started. The plans and the first epics are being written and will be published here.
+The project has just started. Read the [architecture overview](docs/architecture.md) first. The epics are on the board, each with its plan and its sub-issues. Milestones say which phase an issue belongs to: Preview, MVP or AVP (after the MVP).
 
 ## Want to help?
 
