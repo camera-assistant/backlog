@@ -45,8 +45,6 @@ camera-assistant/
   rust-toolchain.toml     pinned stable toolchain, with rustfmt and clippy
   deny.toml               cargo-deny: allowed licences, advisories, allowed sources
   AGENTS.md               instructions for coding agents (CLAUDE.md points here)
-  CONTRIBUTING.md
-  SECURITY.md
   LICENSE                 Apache 2.0
   crates/
     ca-server/            the binary: configuration, startup, supervision of the parts
@@ -62,11 +60,9 @@ camera-assistant/
     Dockerfile
   .github/
     workflows/            ci.yml, release.yml, licences.yml
-    ISSUE_TEMPLATE/
-    pull_request_template.md
 ```
 
-- **Members by glob.** `members = ["crates/*", "modules/*", "conformance/runner"]`. An epic that adds a crate does not touch the workspace file, so parallel work does not collide there.
+- **Members by glob.** `members = ["crates/*", "modules/*", "conformance/runner"]`. An epic that adds a crate does not touch the workspace file, so parallel work does not collide there. Cargo refuses a listed member that does not exist yet, so `conformance/runner` joins the list in the step that creates it.
 - **Crate names follow the architecture,** with the prefix `ca-`: `ca-ingest`, `ca-ring`, `ca-recorder`, `ca-storage`, `ca-media`, `ca-events`, `ca-api`, `ca-matter`. A prefix avoids clashes with crates on crates.io; `ring`, for example, is a widely used cryptography crate. This epic creates only `ca-server`; later plans add the other crates.
 - **Shared settings live in the workspace.** Lints and dependency versions sit in `[workspace.lints]` and `[workspace.dependencies]`. A crate opts in with `lints.workspace = true` and `dep = { workspace = true }`, so two crates never pull two versions of one library by accident.
 - **`unsafe` code is forbidden** (`unsafe_code = "forbid"`) in every crate except those that wrap a C library. Such a crate is named `*-sys` or is a hardware module, sets its own lints, and says in its README why it needs `unsafe`.
@@ -85,6 +81,8 @@ The first `ca-server` does one thing: `ca-server --version` prints the version a
 | build | release build for `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` | any build error |
 | licences | `cargo deny check` and the model manifest check | a disallowed licence, a known advisory, an unknown source, a model missing from the manifest |
 | conformance | the conformance runner against the fake modules | a fake module that should pass and fails, or the reverse |
+
+The aarch64 build runs on GitHub's native arm64 runners, which are free for public repositories. CI then builds what ships, and there is no cross-compilation toolchain to maintain.
 
 CI must stay fast, because agents and people iterate on it. Tests that need real cameras or real accelerators do not run in this workflow. They run in the repository of that hardware, or on runners that hardware owners provide.
 
@@ -117,7 +115,7 @@ The rules are written down in `CONTRIBUTING.md` and enforced in CI where a tool 
 
 ### Contribution rules
 
-`CONTRIBUTING.md`, the same text in each repository:
+One `CONTRIBUTING.md` for all repositories. It lives in the organization's `.github` repository, together with `SECURITY.md`, the issue forms and the pull request template. GitHub applies these files to every repository that has none of its own, so there are no copies to keep in step. The rules:
 
 - Start from an issue. A change that is not on the board starts as an issue or a discussion. A change to a design starts as a pull request to the plan in `camera-assistant/backlog`.
 - One issue per pull request, and small pull requests. The pull request links its issue and the plan step.
@@ -144,10 +142,10 @@ The backlog repository gets an `AGENTS.md` too. It describes the plan format (th
 
 ### Issue and pull request templates
 
-- **Server and frontend:** a bug report form (version, how it is installed, hardware, camera brand and model and how it connects, what happened, logs) and a feature request form that points to discussions. Blank issues are off, so a report always has the fields.
+- **Server and frontend**, shared from the `.github` repository: a bug report form (version, how it is installed, hardware, camera brand and model and how it connects, what happened, logs). Ideas and feature requests are sent to the backlog as an issue. Blank issues are off, so a report always has the fields.
 - **Backlog:** templates for Epic, Feature and Task, with the same sections as the epic files: Problem, What we build, Challenges, Asks to others, and a checklist.
 - **Pull requests:** what changed and why, the linked issue, and a short checklist: tests added, docs updated, no new dependency outside the licence rules, schema version changed if the API changed.
-- **Labels and fields** in the backlog and on the board: the labels `feature`, `enhancement`, `chore`, `frontend`, `server`, `hardware`, `hass-integration`, `matter`, `Needs UX Design`, `help wanted`, `good first issue`; the issue types Epic, Feature and Task; the board fields Area, Size and Phase.
+- **Labels and fields** in the backlog and on the board: the labels `bug`, `feature`, `enhancement`, `chore`, `frontend`, `server`, `hardware`, `hass-integration`, `matter`, `Needs UX Design`, `help wanted`, `good first issue`; the issue types Epic, Feature, Task and Bug; the board fields Priority, Size and Area; the milestones Preview, MVP and AVP for the phase.
 
 ### Repositories for one kind of hardware
 
@@ -200,6 +198,8 @@ Reference clips must be free to share: recorded by the project or under a licenc
 10. **Hardware repositories depend on the contract only, pass the same conformance kit, and release on their own.** The people with the hardware can own the module, and the server never waits for it.
 11. **One `AGENTS.md` per repository, short, linking to the plans.** Agents read it first, and links keep it from going stale.
 12. **Design reasoning lives in the open**, in the plans and in pull requests. Code that many people and agents change needs its reasons where everyone can read them.
+13. **Shared community files live once, in the organization's `.github` repository.** The contribution rules, the security policy, the issue forms and the pull request template then cannot drift apart between repositories.
+14. **aarch64 is built on native arm64 runners.** CI builds what ships, without a cross-compilation toolchain.
 
 ## Steps
 
@@ -209,9 +209,9 @@ Reference clips must be free to share: recorded by the project or under a licenc
 4. **[CI / tooling] Dependency licence and advisory checks.** `deny.toml` with the allowed licences, advisories and sources; a `licences` job in the server CI; the same allowed list checked in the frontend CI.
 5. **[CI / tooling] The model manifest and its check.** The format of `models/models.toml`, a check that fails on a model without an entry or with a licence outside the allowed list, and its tests. The manifest starts empty; the detection epic adds the first models.
 6. **[frontend] Frontend repository baseline.** A TypeScript project with the four scripts `lint`, `typecheck`, `test` and `build`, CI that runs them, and a release workflow that publishes a versioned archive of `dist/`. The framework and component choices are left to the web interface plan.
-7. **[documentation] Contribution rules.** `CONTRIBUTING.md`, `SECURITY.md` and a code of conduct in the server and frontend repositories, following the rules above.
+7. **[documentation] Contribution rules.** `CONTRIBUTING.md`, `SECURITY.md` and a code of conduct in the organization's `.github` repository, following the rules above.
 8. **[documentation] Instructions for coding agents.** `AGENTS.md` and the pointing `CLAUDE.md` in the server and frontend repositories, following the outline above, with the exact commands from steps 2, 3 and 6.
-9. **[CI / tooling] Issue and pull request templates.** The bug report and feature request forms and the pull request template in the server and frontend repositories.
+9. **[CI / tooling] Issue and pull request templates.** The bug report form, the links for ideas and for security reports, and the pull request template in the organization's `.github` repository.
 10. **[CI / tooling] Container image release.** The Dockerfile, the multi-architecture build, the push to the registry on a version tag and as `main` on every push to `main`, a smoke test that runs `ca-server --version` in the image for both architectures, and a GitHub release with generated notes.
 11. **[hass-app] The Home Assistant app.** The app definition for aarch64 and amd64 that runs the image, maps the storage the Supervisor grants to apps, and is installed and started once on a test Home Assistant OS system, as a documented check.
 12. **[CI / tooling] The conformance kit skeleton.** The case format, the `ca-conformance` runner with the fake-module trait, the pass and fail fakes, its tests, and a `conformance` job in CI.
@@ -229,7 +229,6 @@ Reference clips must be free to share: recorded by the project or under a licenc
 
 ## Open questions
 
-- **How aarch64 builds run in CI.** Native arm64 runners, or cross-compilation from x86-64 (with `cross` or `cargo-zigbuild`). Native runners test what ships; cross-compilation is easier to cache. The step 3 builder picks one and writes down why.
 - **Where the Home Assistant app definition lives.** In the server repository (one place, released together), or in a repository of its own, as the Home Assistant app repositories of other projects are. A repository of its own fits the Supervisor's repository format; the server repository keeps the version in one place.
 - **Where the Python client library lives.** A repository of its own (published to PyPI, as the Matter Server's client is), or a folder in the server repository. This also decides where its CI and `AGENTS.md` go.
 - **How the contract and engine crates reach hardware repositories.** A pinned git tag of the main repository, or releases on crates.io. A git tag needs no publishing step; crates.io gives normal version resolution.
@@ -238,7 +237,6 @@ Reference clips must be free to share: recorded by the project or under a licenc
 - **The training data of pretrained weights.** YOLOX weights are Apache 2.0, but they are trained on COCO, whose images come under several Creative Commons licences. Whether that limits the weights is not settled. Options: accept it as most projects do, or train on data the project owns later.
 - **Sign-off on contributions.** No sign-off, a Developer Certificate of Origin line on each commit, or a contributor licence agreement.
 - **Which code of conduct.** An existing text such as the Contributor Covenant, or another.
-- **One place for shared files.** An organization-wide `.github` repository can hold the default `CONTRIBUTING.md`, `SECURITY.md`, code of conduct and issue templates for every repository. That avoids copies, but adds one repository.
 
 ## Later, and what this must not block
 
