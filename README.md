@@ -4,7 +4,7 @@ The backlog of Camera Assistant (a working title), a local recorder for the came
 
 This repository hosts the issues of the [Camera Assistant Project Board](https://github.com/orgs/camera-assistant/projects/2) and the technical plans behind them.
 
-- **Epics** are the larger goals on the board. Each one is broken down into sub-issues with task lists.
+- **Epics** are the larger goals on the board. Each epic links its plan, and its sub-issues are the steps of that plan, each with a task list.
 - **Plans** are in [docs/plans](docs/plans): the technical companion of each epic, so the reasoning is public and can be fed to tooling.
 
 ## Status
@@ -13,7 +13,9 @@ The project has just started. Read the [architecture overview](docs/architecture
 
 ## Want to help?
 
-Pick a sub-issue that has nobody assigned, and say in a comment that you are taking it. For a new idea, open an issue here; it lands in Triage on the board.
+Pick a sub-issue that has nobody assigned, and say in a comment that you are taking it. For a new idea or a question, start a [discussion](https://github.com/camera-assistant/backlog/discussions).
+
+Working with a coding agent? Point it to [AGENTS.md](AGENTS.md) first.
 
 ## License
 
