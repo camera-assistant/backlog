@@ -94,7 +94,10 @@ Assistant Supervisor.
   and resets after a stable run. The backoff values are a constant in code, not a setting.
 - **Watchdog.** A task reports progress through a small handle (`watchdog.feed()`). The
   task supervisor restarts a task that stops reporting for longer than its own limit. Ingest uses
-  this for streams that stall without an error (see the ingest plan for the limits).
+  this for streams that stall without an error (see the ingest plan for the limits). The watchdog
+  runs on a thread of its own, outside the async runtime, and reads progress counters, so it also
+  notices when the runtime itself is blocked. In that case it ends the process, and the
+  container's restart policy, or the app watchdog on Home Assistant OS, starts the server again.
 - **Demand.** A camera task starts the ingest of a stream only when a consumer needs it. In
   the Preview the recorder is the only consumer, so a camera with recording off holds no
   connection to the camera at all. This keeps scarce camera connections free.
@@ -105,6 +108,21 @@ Assistant Supervisor.
 - **Shutdown.** On a stop signal the server stops accepting API calls, asks every camera task
   to finish, waits a short time for open segment files to be closed cleanly, and exits. A hard
   kill is safe as well: the recorder recovers open files at the next start.
+
+### What fails, and what recovers it
+
+| Failure | What is lost | What recovers it |
+|---|---|---|
+| A camera drops off the network | Footage during the outage | Ingest reconnects with a growing back-off (ingest plan). |
+| A stream stalls without an error | Footage until the stall is noticed | The watchdog sees no progress; ingest tears the session down and reconnects (ingest plan). |
+| A camera task panics | That camera, for a moment | The task supervisor starts it again after a back-off. Other cameras are untouched. |
+| A detection module crashes | Detections | The server restarts it with a back-off. Recording and the camera's own events carry on (detection plan). |
+| A detection module hangs | Detections | Its health reports a hung call or stops arriving, and the server kills and restarts it (detection plan). |
+| The async runtime is blocked | Footage until the restart | The watchdog thread ends the process; the container's restart policy or the app watchdog starts it again. |
+| A disk fills up | The oldest unprotected footage. New footage on that location, when nothing more can be deleted. | Emergency cleanup deletes the oldest unprotected footage. When only protected or open files are left, the recorder stops writing to that location and the rule for an unavailable primary applies. From the MVP, Home Assistant shows a repair (recorder plan, storage plan). |
+| A copy location goes offline | Nothing, unless retention on the primary deletes a file before it is copied. That copy is then missed. | Its copy queue waits until it is back. Health reports a missed copy (storage plan). |
+| Home Assistant restarts | Running recordings: nothing. Triggers that Home Assistant would have sent in that time, and the event clips they would have started. | The server does not depend on Home Assistant and keeps recording. The integration reconnects when Home Assistant is back. |
+| The server crashes | Footage until the restart | The container's restart policy or the app watchdog starts it again. The recorder recovers open files, and the index is rebuilt from the files if it is lost (recorder plan). |
 
 ### Camera registry
 
@@ -318,11 +336,13 @@ Proposed in this plan (to confirm in review):
    creates `ca-server` and the shared lints, `unsafe` forbidden included), add the library
    crates of this plan (`ca-supervisor`, `ca-registry`, `ca-api`) and empty crates for the parts
    that later plans fill (`ca-ingest`, `ca-ring`, `ca-recorder`, `ca-storage`, `ca-media`).
-   Command line and environment variables for the data folder and the port. Start, and a
-   graceful stop on SIGTERM and SIGINT. Confirm the async runtime.
+   Two rules for dependencies: no crate except `ca-server` depends on `ca-api`; the server's
+   crates depend on detection only through `ca-detect-contract`, so FFmpeg and inference runtimes
+   are never linked into the server. Command line and environment variables for the data folder
+   and the port. Start, and a graceful stop on SIGTERM and SIGINT. Confirm the async runtime.
 2. **[server] Task supervisor and watchdog.** The task tree, restart with backoff, the watchdog
-   handle, the stop order, and the same rules for helper processes. Tests with tasks that
-   fail, panic and hang.
+   handle and its thread outside the async runtime, the stop order, and the same rules for helper
+   processes. Tests with tasks that fail, panic and hang.
 3. **[server] Data folder, config store and secrets.** `config.json` with schema version and
    migrations, `secrets.json` with mode 0600, atomic writes, refusal of a newer config.
 4. **[server] Camera registry.** The camera record, validation, credentials split from the

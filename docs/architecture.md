@@ -123,7 +123,7 @@ Plan: [docs/plans/detection.md](plans/detection.md).
 
 Recording only rewraps the stream, so it runs on every box. Detection decodes video and runs a model, so it scales with the hardware.
 
-**The module contract.** A detection module is a separate process for one kind of hardware. It receives a camera's compressed substream and returns detections: label, score, box and timestamp. Decoding, scaling and inference stay inside the module. It reports its devices, models and the rate it measured. The detection plan defines the exact messages. This seam keeps closed vendor libraries out of the server and driver crashes away from recordings, and lets the people who own a kind of hardware release its module. Every module passes a conformance kit: reference clips, the detections they must produce, and a time budget.
+**The module contract.** A detection module is a separate process for one kind of hardware. Inside, it is a library: a board description (what differs per hardware family) plus the shared module host that runs decoding, the motion check and inference around it. The server sees every module through one trait. A module receives a camera's compressed substream and returns detections: label, score, box and timestamp. Decoding, scaling and inference stay inside the module. It reports its devices, models and the rate it measured. The detection plan defines the exact messages. This seam keeps closed vendor libraries out of the server and driver crashes away from recordings, and lets the people who own a kind of hardware release its module. Every module passes a conformance kit: reference clips, the detections they must produce, and a time budget.
 
 The first detection engine comes from [Cairn](https://github.com/bbangert/cairn-nvr), whose author donates it. Models come from the YOLOX family (Apache 2.0) and are downloaded at first start. What the server picks by itself stays within permissively licensed models. A model under a copyleft licence can only be an optional download that a person chooses.
 
@@ -181,6 +181,22 @@ A playback handle says where and how to play something, never the video itself. 
 | `camera-assistant/camera-assistant-rockchip`, `camera-assistant/camera-assistant-qualcomm` (later) | Detection modules for one kind of hardware | Rust |
 
 The Home Assistant side is Python. The licence is Apache 2.0. Setup of the repositories: [docs/plans/project-setup.md](plans/project-setup.md). The project is developed in the open and AI-first: every task carries enough context for a person or a coding agent to start, and a maintainer reviews every change.
+
+## Code structure and extension points
+
+The server is one Rust workspace with a crate per part. Two rules keep the parts apart ([docs/plans/server-foundation.md](plans/server-foundation.md)):
+
+- Only the server binary depends on the API crate. The parts never do.
+- The server reaches detection only through the detection contract crate. FFmpeg and inference runtimes are never linked into the server; they live in the detection modules.
+
+| To add | You write | Where it lives |
+|---|---|---|
+| A kind of detection hardware | A `Board`, its `DecodeStage` and a `Backend` ([detection plan](plans/detection.md)) | The main repository for the CPU and Intel graphics; a repository of its own per board family, such as `camera-assistant-rockchip` |
+| A second chip in a family | A hardware profile: a ladder of models with a measured budget each ([detection plan](plans/detection.md)) | The family's repository |
+| A model | A rung in a profile's ladder, plus an output decoder when its output layout is new ([detection plan](plans/detection.md)) | The profile; the engine crates for a new decoder |
+| A storage location or cloud connector | The `Location` trait ([storage plan](plans/storage-locations.md)) | The main repository for folder locations; how connectors are added is open question 3 of the storage plan |
+| A camera protocol | An ingest that puts fragments into the ring ([ingest plan](plans/rtsp-ingest-and-ring.md)) | The main repository |
+| A recording system in Home Assistant | The recording provider platform, in Python ([plan](plans/recording-provider-platform.md)) | Home Assistant; not part of the server |
 
 ## Phases
 
