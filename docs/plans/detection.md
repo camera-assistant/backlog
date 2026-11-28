@@ -331,6 +331,10 @@ hardware. The module reports these budgets in `probe_result`, and the planner us
 benchmark results. The benchmark runs only for models without such a budget, for example on the
 CPU and on Intel graphics, where hosts differ too much for profiles.
 
+A budget counts only when it was measured on this project's module, with the decode path that the
+module uses. A ladder that comes from Cairn brings its models; each budget is measured again
+before it counts, and until then the model is benchmarked like any other.
+
 ### Tier 1 output
 
 The server turns detections into presence per camera and label: `present` from the first
@@ -427,7 +431,7 @@ Paths are in https://github.com/bbangert/cairn-nvr unless the row says otherwise
 | The stand-alone detect binary (`plugins/cairn-detect/src/bin/cairn-detect.rs`, `cli.rs`, `multiplex.rs`, `emit.rs`, `control.rs`, `rtp.rs`) | The starting point for the module host crate. Its RTP input is replaced by the contract. |
 | The Rockchip code (the cairn-rockchip repository, https://github.com/bbangert/cairn-rockchip: RKNN, MPP, RGA, the DMA buffer pool, the probe) | `camera-assistant-rockchip` |
 | The Qualcomm backend (QNN through ONNX Runtime, in `plugins/cairn-detect/src/infer/backend/onnxruntime.rs`) and V4L2 decoding | `camera-assistant-qualcomm` |
-| Hardware profiles (`priv/profiles/generic/qcs6490-tier1.yml`; `priv/profiles/rk3566-tier1.yml` in cairn-rockchip) | The repository of each board family |
+| Hardware profiles (`priv/profiles/generic/qcs6490-tier1.yml`; `priv/profiles/rk3566-tier1.yml` in cairn-rockchip) | The repository of each board family. The ladders come along; the budgets are measured again on the new module. |
 | Export and verification tools (`tools/qdq-export`, `tools/board-bench`, `tools/board-soak`, `plugins/cairn-detect/verify`; `tools/rknn-export` in cairn-rockchip) | The model builds step and the conformance kit |
 | Behaviour that Cairn has in Elixir: the picker (`lib/cairn/pipeline/picker.ex`), the sample gate (`Cairn.Stage.SampleGate`), ladder selection (`lib/cairn/config.ex`), fetching files (`lib/cairn/artifacts.ex`), health and the canary (`lib/cairn/native/health.ex`, `canary.ex`) | Written again in Rust: ladder selection in the server's planner, the rest in the module host crate |
 
@@ -513,7 +517,7 @@ Does not come along:
     the substream. Falls back to software decoding per stream and says so in `stats`.
 15. **[hardware] Rockchip module.** The RKNN module from Cairn's Rockchip code: runtime loaded
     with `dlopen` and fetched at first start, models compiled for the RK3566, its hardware profile
-    for the RK3566, software decoding to start with. Passes the conformance kit on a Green once
+    for the RK3566 with budgets measured on this module, software decoding to start with. Passes the conformance kit on a Green once
     the driver is available.
 16. **[os] NPU driver on the Green.** Work out the route with the Home Assistant OS maintainers
     (home-assistant/operating-system#3089) and test the Rockchip module on it. Tracking issue.
