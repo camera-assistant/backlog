@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Idea or feature request
-    url: https://github.com/camera-assistant/backlog/discussions/categories/ideas
+    url: https://github.com/camera-assistant/camera-assistant/discussions/categories/ideas
     about: Share an idea or ask for a feature in the discussions.
   - name: Question
-    url: https://github.com/camera-assistant/backlog/discussions/categories/q-a
+    url: https://github.com/camera-assistant/camera-assistant/discussions/categories/q-a
     about: Ask how something works, or get help from others.
