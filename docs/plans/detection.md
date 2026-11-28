@@ -482,8 +482,8 @@ Does not come along:
 6. **[server] The module supervisor.** Finds the installed modules, starts them, runs the
    handshake, restarts a module that crashes or hangs with a back-off that grows steeply when it
    keeps failing, kills a module that is `wedged` or whose `health` does not arrive in time, and
-   reports module health
-   in the API. A module crash never affects ingest or recording; a test proves it.
+   reports module health in the API. A module crash never affects ingest or recording; a test
+   proves it.
 7. **[server] Feed the substream to a module.** Takes a camera's substream from the ring and sends
    it as access units. Uses the main stream when a camera has no substream and flags that in the
    camera's health. Never blocks ingest.
