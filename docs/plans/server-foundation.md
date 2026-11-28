@@ -119,9 +119,9 @@ Assistant Supervisor.
 | A detection module crashes | Detections | The server restarts it with a back-off. Recording and the camera's own events carry on (detection plan). |
 | A detection module hangs | Detections | Its health reports a hung call or stops arriving, and the server kills and restarts it (detection plan). |
 | The async runtime is blocked | Footage until the restart | The watchdog thread ends the process; the container's restart policy or the app watchdog starts it again. |
-| A disk fills up | The oldest unprotected footage | Emergency cleanup deletes it. From the MVP, Home Assistant shows a repair (recorder plan). |
-| A copy location goes offline | Nothing | Its copy queue waits until it is back (storage plan). |
-| Home Assistant restarts | Nothing | The server does not depend on it. |
+| A disk fills up | The oldest unprotected footage. New footage on that location, when nothing more can be deleted. | Emergency cleanup deletes the oldest unprotected footage. When only protected or open files are left, the recorder stops writing to that location and the rule for an unavailable primary applies. From the MVP, Home Assistant shows a repair (recorder plan, storage plan). |
+| A copy location goes offline | Nothing, unless retention on the primary deletes a file before it is copied. That copy is then missed. | Its copy queue waits until it is back. Health reports a missed copy (storage plan). |
+| Home Assistant restarts | Running recordings: nothing. Triggers that Home Assistant would have sent in that time, and the event clips they would have started. | The server does not depend on Home Assistant and keeps recording. The integration reconnects when Home Assistant is back. |
 | The server crashes | Footage until the restart | The container's restart policy or the app watchdog starts it again. The recorder recovers open files, and the index is rebuilt from the files if it is lost (recorder plan). |
 
 ### Camera registry

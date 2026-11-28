@@ -147,7 +147,7 @@ pub trait Board: Send + Sync + 'static {
     /// Hardware profiles: per chip, a ladder of models with a measured budget each.
     fn profiles(&self) -> &[HardwareProfile];
 
-    /// Files this board needs at first start, each pinned by sha256. The server fetches them.
+    /// Vendor runtime files to fetch at first start, each pinned by sha256.
     fn artifacts(&self) -> Vec<Artifact>;
 
     /// What cannot work on this host, and why, before any stream opens.
@@ -191,13 +191,18 @@ pub trait Backend: Send {
 A board registers a backend through a `Provider`: its descriptor, its open function and the number
 of contexts to hold, so that passes for several cameras can run at once.
 
+`run` takes a tensor in host memory. Cairn's Rockchip code hands a frame that stays on the device
+to the NPU through calls of its own, beside this trait. How a `Frame::Device` reaches inference
+in the module host is open question 13.
+
 Besides the chain, the module host:
 
 - **Loads a model first in a short-lived child process (a canary),** because a vendor runtime can
   abort the whole process on a bad model file. Only a model that loaded there is opened in the
   module.
-- **Lists the files it needs,** each with its sha256: models, and a vendor's runtime where it
-  may not be shipped. The server fetches and checks them (see "Models").
+- **Fetches the vendor's runtime** that its board lists, where that runtime may not be shipped:
+  at first start, from a pinned address, checked against a pinned sha256 (the rule of the project
+  setup plan). Models are fetched by the server (see "Models").
 - **Reports health** (see "Health and restarts").
 
 ### The contract, version 1
@@ -207,7 +212,7 @@ Messages over a Unix socket. The exact encoding is an open question. The shapes:
 | Message | Direction | Content |
 |---|---|---|
 | `hello` | module → server | contract version, module name and version |
-| `probe` / `probe_result` | both | devices found, decoders available (codec, maximum size), models it can run, why something is not available; per model, an optional measured budget from the module's hardware profile; the files it needs, each with its sha256 |
+| `probe` / `probe_result` | both | devices found, decoders available (codec, maximum size), models it can run, why something is not available; per model, an optional measured budget from the module's hardware profile |
 | `benchmark` / `benchmark_result` | both | for one model: passes per second sustained, latency p50 and p95, measured on a reference clip |
 | `open_stream` | server → module | stream id, codec (H.264 or H.265), codec parameters, picture size, the model to use |
 | `access_unit` | server → module | stream id, timestamp, keyframe flag, bytes |
@@ -256,10 +261,12 @@ pub trait Detector: Send {
 The module host sends `health` at a fixed interval. It rests on two measurements:
 
 - **The time of completed model passes,** without the time a frame waited in the module's queue,
-  compared with a CPU baseline. An accelerator whose passes are not clearly faster than the CPU
-  has fallen back to it and is `degraded`. A busy accelerator still completes its passes at
-  accelerator speed, so load alone never makes a module `degraded`; the planner sees load in
-  `stats`. With too few passes in an interval there is no verdict.
+  compared with a CPU baseline. An accelerator whose passes are not several times faster than
+  the CPU is treated as fallen back to it and is `degraded`. The margin is wide on purpose. On
+  the RK3566, Cairn notes about 75 ms for a pass on the NPU against about 690 ms on the CPU, and
+  passes on two contexts at once are 1.4 to 1.7 times slower, so they stay well inside it. Load
+  alone never makes a module `degraded`; the planner sees load in `stats`. With too few passes
+  in an interval there is no verdict.
 - **The age of each stream's outstanding decode or inference call.** A call that runs past its
   deadline makes the module `wedged`, also while its other streams still complete passes.
 
@@ -339,8 +346,7 @@ logic, which builds events with a start, an end and labels. Tier 1 runs no track
 - An NPU needs the model compiled per chip, with a fixed input size and 8-bit weights. The CPU and
   OpenVINO run ONNX directly.
 - Every model file is built in CI, scored against a reference set, and published with a sha256.
-  The server fetches it at first start and checks the hash. A module lists the files it needs in
-  `probe_result`.
+  The server fetches it at first start and checks the hash.
 
 Model families that cannot be used, and why:
 
@@ -423,7 +429,7 @@ Paths are in https://github.com/bbangert/cairn-nvr unless the row says otherwise
 | The Qualcomm backend (QNN through ONNX Runtime, in `plugins/cairn-detect/src/infer/backend/onnxruntime.rs`) and V4L2 decoding | `camera-assistant-qualcomm` |
 | Hardware profiles (`priv/profiles/generic/qcs6490-tier1.yml`; `priv/profiles/rk3566-tier1.yml` in cairn-rockchip) | The repository of each board family |
 | Export and verification tools (`tools/qdq-export`, `tools/board-bench`, `tools/board-soak`, `plugins/cairn-detect/verify`; `tools/rknn-export` in cairn-rockchip) | The model builds step and the conformance kit |
-| Behaviour that Cairn has in Elixir: the picker (`lib/cairn/pipeline/picker.ex`), the sample gate (`Cairn.Stage.SampleGate`), ladder selection (`lib/cairn/config.ex`), fetching files (`lib/cairn/artifacts.ex`), health and the canary (`lib/cairn/native/health.ex`, `canary.ex`) | Written again in Rust: ladder selection and fetching files in the server, the rest in the module host crate |
+| Behaviour that Cairn has in Elixir: the picker (`lib/cairn/pipeline/picker.ex`), the sample gate (`Cairn.Stage.SampleGate`), ladder selection (`lib/cairn/config.ex`), fetching files (`lib/cairn/artifacts.ex`), health and the canary (`lib/cairn/native/health.ex`, `canary.ex`) | Written again in Rust: ladder selection in the server's planner, the rest in the module host crate |
 
 Of the model catalog, the server only picks families that the "Models" section allows.
 
@@ -476,7 +482,8 @@ Does not come along:
 4. **[server] The module host.** A shared crate that every module uses: the socket, the
    handshake, one pipeline per stream (decode, scale, motion check, inference), dropping to the
    next keyframe when behind, and `stats`. The `Board` and `DecodeStage` traits, the canary for
-   model loads, and `health` from the time of completed passes and the age of outstanding calls.
+   model loads, fetching a board's vendor runtime, and `health` from the time of completed passes
+   and the age of outstanding calls.
 5. **[server] The CPU module.** Software decoding, ONNX Runtime on the CPU, the YOLOX ladder.
    Passes the conformance kit in CI on x86-64 and aarch64.
 6. **[server] The module supervisor.** Finds the installed modules, starts them, runs the
@@ -489,8 +496,7 @@ Does not come along:
    camera's health. Never blocks ingest.
 8. **[CI / tooling] Model builds.** Export YOLOX nano, tiny and small to ONNX, quantise, compile
    per target, score each result on the target or its simulator, and publish the files with their
-   sha256. A fetcher in the server downloads and checks them, and the other files a module lists, at
-   first start.
+   sha256. A fetcher in the server downloads and checks them at first start.
 9. **[server] Benchmark the host.** Runs the benchmark per module and model, stores the results,
    and runs again after an update of a module or a model. Skips models that have a budget from the
    module's hardware profile.
@@ -569,6 +575,10 @@ Does not come along:
     native call that hangs stops recordings, the server links FFmpeg and vendor runtimes, and each
     board family ships its own build of the whole server. Step 20 decides it; until then every
     module is a process.
+13. **Device frames into inference.** `Backend::run` takes a tensor in host memory. Options: copy
+    a device frame to host memory before the pass, or give `Backend` an input path for device
+    buffers, as Cairn's Rockchip code has beside the trait. Decided with a measurement when the
+    Rockchip module is built (step 15).
 
 ## Later, and what this must not block
 
