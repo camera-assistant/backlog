@@ -13,7 +13,7 @@ The project has just started. Read the [architecture overview](docs/architecture
 
 ## Want to help?
 
-Pick a sub-issue that has nobody assigned, and say in a comment that you are taking it. For a new idea or a question, start a [discussion](https://github.com/camera-assistant/backlog/discussions).
+Pick a sub-issue that has nobody assigned, and say in a comment that you are taking it. For a new idea or a question, start a [discussion](https://github.com/camera-assistant/camera-assistant/discussions).
 
 Working with a coding agent? Point it to [AGENTS.md](AGENTS.md) first.
 
