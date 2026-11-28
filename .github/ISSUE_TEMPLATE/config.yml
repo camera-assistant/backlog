@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Idea or feature request
+  - name: Development talk
+    url: https://github.com/camera-assistant/camera-assistant/discussions
+    about: Questions and talk about the code, the plans and work in progress.
+  - name: Idea
     url: https://github.com/camera-assistant/camera-assistant/discussions/categories/ideas
-    about: Share an idea or ask for a feature in the discussions.
-  - name: Question
-    url: https://github.com/camera-assistant/camera-assistant/discussions/categories/q-a
-    about: Ask how something works, or get help from others.
+    about: Propose a feature or a change, so it can be talked through first.
