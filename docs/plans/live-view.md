@@ -104,6 +104,10 @@ viewer starts at the last keyframe in the ring, so the first picture shows at on
   other viewers.
 - A keyframe request from the viewer (PLI) is answered from the ring's last keyframe, without
   asking the camera.
+- RTP timestamps towards a viewer keep rising when the camera reconnects, so a reconnect does
+  not end the viewer's session.
+- The session description states the stream's real H.264 profile and level, taken from its
+  parameter sets.
 
 ### Signalling
 
@@ -199,8 +203,9 @@ every stream.
    starting at the last keyframe, with a bounded queue that drops to the next keyframe when the
    subscriber is slow.
 3. **[server] WebRTC sessions from the ring.** One session per viewer: H.264 and H.265 into RTP,
-   Opus audio as it is and AAC converted to Opus, keyframe requests answered from the ring, sessions closed when
-   the camera stream ends or the viewer leaves.
+   Opus audio as it is and AAC converted to Opus, keyframe requests answered from the ring, RTP
+   timestamps that keep rising across camera reconnects, the real H.264 profile and level in the
+   session description, sessions closed when the camera stream ends or the viewer leaves.
 4. **[server] Live view commands in the API.** `live/offer`, `live/candidate` and `live/close`
    over the WebSocket API, with trickle ICE and the ICE servers given by the client. Errors with a
    code and a reason.

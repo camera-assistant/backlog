@@ -85,6 +85,12 @@ Apache 2.0). Its detection engine is donated to this project and is the starting
 A detection module is a separate process, one per kind of hardware. It serves every camera that
 the server gives it.
 
+A module is a library first: a `Board` value, which holds everything that differs per hardware
+family, plus the shared module host, which runs the chain around it (see "Inside a module"). A
+small binary hosts that library as a separate process. The server reaches detection only through
+one trait, `Detector` (see "The server's side"), so other ways to host a module stay possible
+(open question 12).
+
 - **In:** the compressed substream of a camera, as access units with timestamps, plus the codec
   parameters.
 - **Out:** detections (label, score, box, timestamp), motion results and statistics.
@@ -102,6 +108,97 @@ Why a separate process:
 A module has a name and a contract version. The server refuses a module with an unknown major
 version.
 
+### Inside a module
+
+The module host runs one chain per stream:
+
+1. **Wait for a keyframe.** Access units before the first keyframe are dropped.
+2. **Decode every access unit,** also the ones that are not analysed, because a decoder needs its
+   reference frames.
+3. **Sample gate.** By wall clock, it admits frames at the rate that `set_mode` gives.
+4. **Scale** an admitted frame to the model's input size.
+5. **Motion check** on the scaled frame.
+6. **Model pass,** when the mode and the motion check ask for one.
+7. **Detections out,** as `motion` and `detections` messages.
+
+A board supplies decode and scale (one stage, on its own decoder and scaler where it has them) and
+the inference backend. The module host and the engine crates supply the rest: the contract, the
+chain, the sample gate, the motion check, decoding model outputs into boxes, fetching files, the
+canary and health.
+
+The sketches below show the shape, not final signatures. `Board` and `DecodeStage` live in the
+module host crate; `Backend` and `Provider` live in the engine crates. They come from Cairn's
+design (https://github.com/bbangert/cairn-nvr): `Board` is the Rust form of the
+`Cairn.Stage.Board` behaviour that Cairn's boards implement in Elixir.
+
+```rust
+/// Everything that differs between hardware families, in one value.
+pub trait Board: Send + Sync + 'static {
+    fn name(&self) -> &'static str;
+
+    /// Inference runtimes this board brings.
+    fn backends(&self) -> &'static [Provider];
+
+    /// Decode and scale for one stream, delivering frames at the model's input size.
+    /// A refusal says why; the module host reports it.
+    fn decode_stage(&self, stream: &StreamSpec, input: &InputSpec)
+        -> Result<Box<dyn DecodeStage>, Unavailable>;
+
+    /// Hardware profiles: per chip, a ladder of models with a measured budget each.
+    fn profiles(&self) -> &[HardwareProfile];
+
+    /// Files to fetch at first start, each pinned by sha256.
+    fn artifacts(&self) -> Vec<Artifact>;
+
+    /// What cannot work on this host, and why, before any stream opens.
+    fn preflight(&self) -> Vec<Unavailable>;
+}
+
+/// Decode and scale as one stage, because the cheapest path differs per chip.
+pub trait DecodeStage: Send {
+    /// Decodes every unit. Returns a frame only when `sample` is set.
+    fn push(&mut self, unit: &[u8], pts: i64, sample: bool) -> Result<Option<Frame>>;
+}
+
+pub enum Frame {
+    /// Pixels in host memory.
+    Host(RgbFrame),
+    /// A frame that stays on the device. Dropping it returns the buffer.
+    Device(Box<dyn DeviceFrame>),
+}
+```
+
+Cairn's decode stream (`DecodeStream` in `plugins/cairn-native`) takes access units the same
+way: it decodes every unit, and the caller says per unit whether it wants a frame.
+
+`Backend` is one inference runtime. It exists in Cairn (`plugins/cairn-detect/src/infer/backend.rs`)
+and moves over as it is:
+
+```rust
+pub trait Backend: Send {
+    /// Loads the model. A bad file fails here, not on the first frame.
+    fn open(model: &Path, options: &SessionOptions) -> Result<Self> where Self: Sized;
+    fn descriptor(&self) -> &'static Descriptor;
+    /// The model's inputs and outputs.
+    fn io(&self) -> &ModelIo;
+    /// Infers one frame.
+    fn run(&mut self, input: InputTensor) -> Result<Box<dyn Tensors + '_>>;
+    /// A second context on the same model that shares its weights, where the runtime can.
+    fn sibling(&mut self) -> Result<Option<Box<dyn Backend>>> { Ok(None) }
+}
+```
+
+A board registers a backend through a `Provider`: its descriptor, its open function and the number
+of contexts to hold, so that passes for several cameras can run at once.
+
+Besides the chain, the module host:
+
+- **Loads a model first in a short-lived child process (a canary),** because a vendor runtime can
+  abort the whole process on a bad model file. Only a model that loaded there is opened in the
+  module.
+- **Fetches its files** at first start, as "Models" describes.
+- **Reports health** (see "Health and restarts").
+
 ### The contract, version 1
 
 Messages over a Unix socket. The exact encoding is an open question. The shapes:
@@ -109,7 +206,7 @@ Messages over a Unix socket. The exact encoding is an open question. The shapes:
 | Message | Direction | Content |
 |---|---|---|
 | `hello` | module → server | contract version, module name and version |
-| `probe` / `probe_result` | both | devices found, decoders available (codec, maximum size), models it can run, why something is not available |
+| `probe` / `probe_result` | both | devices found, decoders available (codec, maximum size), models it can run, why something is not available; per model, an optional measured budget from the module's hardware profile |
 | `benchmark` / `benchmark_result` | both | for one model: passes per second sustained, latency p50 and p95, measured on a reference clip |
 | `open_stream` | server → module | stream id, codec (H.264 or H.265), codec parameters, picture size, the model to use |
 | `access_unit` | server → module | stream id, timestamp, keyframe flag, bytes |
@@ -118,6 +215,7 @@ Messages over a Unix socket. The exact encoding is an open question. The shapes:
 | `motion` | module → server | stream id, timestamp, active or not, changed area |
 | `detections` | module → server | stream id, timestamp of the frame, list of `{label, score, box}` with the box in coordinates from 0 to 1 |
 | `stats` | module → server | per stream: frames decoded, passes run, frames dropped, queue length, latency |
+| `health` | module → server | `healthy`, `degraded` or `wedged`, with timings, from a timed probe pass; `degraded` means the accelerator answers at the speed of the CPU baseline |
 | `close_stream` | server → module | stream id |
 
 Rules:
@@ -128,6 +226,43 @@ Rules:
 - When a module falls behind, it drops frames up to the next keyframe and says so in `stats`. It
   never blocks the server. The server never waits on a module.
 - A module reports a failure as a message, not as a crash, where it can.
+
+### The server's side: the `Detector` trait
+
+The server sees detection only through the `Detector` trait in `ca-detect-contract`. Each message
+of the contract is one of its calls or events; `hello` is part of connecting. It has two
+implementations: the child-process client, which speaks the contract over the socket, and the fake
+module used in tests.
+
+```rust
+pub trait Detector: Send {
+    async fn probe(&mut self) -> Result<ProbeResult>;
+    async fn benchmark(&mut self, model: &ModelId) -> Result<BenchmarkResult>;
+    async fn open_stream(&mut self, stream: StreamSpec) -> Result<()>;
+    /// Never blocks. A module that is behind drops to the next keyframe itself.
+    fn push(&self, stream: StreamId, unit: AccessUnit);
+    async fn set_mode(&mut self, stream: StreamId, mode: Mode) -> Result<()>;
+    async fn detect_window(&mut self, stream: StreamId, from: Timestamp, until: Timestamp)
+        -> Result<()>;
+    async fn close_stream(&mut self, stream: StreamId) -> Result<()>;
+    /// The next motion, detections, stats or health event, in order.
+    async fn next_event(&mut self) -> DetectorEvent;
+}
+```
+
+### Health and restarts
+
+A module runs a timed probe pass at a fixed interval and sends the result as `health`. It compares
+the time per pass with a CPU baseline, so an accelerator that has fallen back to the speed of the
+CPU is reported as `degraded` and never mistaken for a busy one. The planner plans without a
+module that is `degraded` or `wedged`, and health tells the person why.
+
+The module supervisor in the server restarts a module that crashes, and kills and restarts one
+whose `health` misses its deadline. When a module keeps failing, the back-off grows steeply.
+Every restart opens new sessions on the accelerator, and a runtime can keep state of old sessions
+that only a reboot clears: Cairn's export tools for the QCS6490 class reboot the board after a
+fixed number of sessions for that reason. So a restart does not always bring an accelerator back.
+A module that comes back `degraded` stays out of the plan, and health reports it.
 
 ### Measuring the host and choosing what to do
 
@@ -156,6 +291,8 @@ The server decides per camera how much analysis it runs. Nobody picks a model or
    can do.
 2. **Measure.** For each module and model it runs a short benchmark on a reference clip. It
    stores the result per host, and measures again after an update of the module or the model.
+   Where the module's hardware profile gives a measured budget for a model, the server uses that
+   budget and runs no benchmark for it.
 3. **Plan.** It chooses per camera a step, a rate and a model, so that the expected load stays
    under a share of the measured capacity. The expected load counts how often a camera has motion,
    learned from what the motion check reports. It prefers, in this order: a step for every
@@ -170,6 +307,12 @@ a status ("Detection: on motion, person and vehicle"), not as a setting.
 
 With several modules on one host (for example the CPU and Intel graphics), the planner gives each
 camera to one module and fills the fastest one first.
+
+**Hardware profiles.** For a chip that a module knows, the module ships a hardware profile: a
+ladder of models with a measured budget each, measured by the module's bench scripts on that
+hardware. The module reports these budgets in `probe_result`, and the planner uses them as it uses
+benchmark results. The benchmark runs only for models without such a budget, for example on the
+CPU and on Intel graphics, where hosts differ too much for profiles.
 
 ### Tier 1 output
 
@@ -254,6 +397,33 @@ module on every change. Hardware modules run it on runners that have the hardwar
 - A board-specific module can move to its own repository (`camera-assistant-rockchip`,
   `camera-assistant-qualcomm`). It depends on the contract crate and the engine crates by version.
 
+### What moves from Cairn, and where it lands
+
+Paths are in https://github.com/bbangert/cairn-nvr unless the row says otherwise.
+
+| In Cairn | Lands in |
+|---|---|
+| Model handling: backends, output decoding, labels, quantisation parameters (`plugins/cairn-detect/src/infer/`) | The engine crates |
+| Decode and scale (`plugins/cairn-detect/src/decode.rs`, `hwdecode.rs`, `glscale.rs`; the decode stream in `plugins/cairn-native/src/decoder.rs`) | The engine crates. The V4L2 decoding path and the GL scaler go to `camera-assistant-qualcomm`. |
+| Motion check (`plugins/cairn-detect/src/motion.rs`, `gate.rs`) | The engine crates |
+| Engine and per-camera streams (`plugins/cairn-ort/src/engine.rs`, `stream.rs`) | The engine crates, without the Rustler types |
+| The stand-alone detect binary (`plugins/cairn-detect/src/bin/cairn-detect.rs`, `cli.rs`, `multiplex.rs`, `emit.rs`, `control.rs`, `rtp.rs`) | The starting point for the module host crate. Its RTP input is replaced by the contract. |
+| The Rockchip code (the cairn-rockchip repository, https://github.com/bbangert/cairn-rockchip: RKNN, MPP, RGA, the DMA buffer pool, the probe) | `camera-assistant-rockchip` |
+| The Qualcomm backend (QNN through ONNX Runtime, in `plugins/cairn-detect/src/infer/backend/onnxruntime.rs`) and V4L2 decoding | `camera-assistant-qualcomm` |
+| Hardware profiles (`priv/profiles/generic/qcs6490-tier1.yml`; `priv/profiles/rk3566-tier1.yml` in cairn-rockchip) | The repository of each board family |
+| Export and verification tools (`tools/qdq-export`, `tools/board-bench`, `tools/board-soak`, `plugins/cairn-detect/verify`; `tools/rknn-export` in cairn-rockchip) | The model builds step and the conformance kit |
+| Behaviour that Cairn has in Elixir: the picker (`lib/cairn/pipeline/picker.ex`), the sample gate (`Cairn.Stage.SampleGate`), ladder selection (`lib/cairn/config.ex`), fetching files (`lib/cairn/artifacts.ex`), health and the canary (`lib/cairn/native/health.ex`, `canary.ex`) | Written again in Rust: ladder selection in the server's planner, the rest in the module host crate |
+
+Of the model catalog, the server only picks families that the "Models" section allows.
+
+Does not come along:
+
+- the Membrane pipeline and its elements;
+- the FFmpeg bridge process;
+- the Rustler bindings, and the board loader with its manifest;
+- the LiveView pages;
+- camera configuration in a YAML file.
+
 ## Decisions
 
 1. **Modules are separate processes, one per kind of hardware.** Reason: closed libraries stay out
@@ -282,22 +452,25 @@ module on every change. Hardware modules run it on runners that have the hardwar
 
 1. **[server] The module contract, version 1.** A crate (`ca-detect-contract`) with the message
    types of the contract, the encoding, the version handshake and a written specification in
-   `docs/`. Includes a fake module for tests.
+   `docs/`. The `Detector` trait and its child-process client. Includes a fake module for tests
+   that implements `Detector`.
 2. **[server] Move the engine from Cairn.** Bring `cairn-detect` and the engine part of
-   `cairn-ort` into the repository as library crates with the `ca-` prefix. Remove the Rustler
-   types, keep the tests, keep the licence notices and credit Cairn by its repository link in the
-   README.
+   `cairn-ort` into the repository as library crates with the `ca-` prefix, as the table "What
+   moves from Cairn, and where it lands" says. Remove the Rustler types, keep the tests, keep the
+   licence notices and credit Cairn by its repository link in the README.
 3. **[CI / tooling] The conformance kit.** On the skeleton of the project setup plan (case format,
    `ca-conformance` runner, report): connect the runner to the real contract, add the behaviour
    checks, the first set of reference clips with expected detections, and run it for the CPU
    module in CI.
 4. **[server] The module host.** A shared crate that every module uses: the socket, the
    handshake, one pipeline per stream (decode, scale, motion check, inference), dropping to the
-   next keyframe when behind, and `stats`.
+   next keyframe when behind, and `stats`. The `Board` and `DecodeStage` traits, the canary for
+   model loads, and `health` from a timed probe pass.
 5. **[server] The CPU module.** Software decoding, ONNX Runtime on the CPU, the YOLOX ladder.
    Passes the conformance kit in CI on x86-64 and aarch64.
 6. **[server] The module supervisor.** Finds the installed modules, starts them, runs the
-   handshake, restarts a module that crashes or hangs with a back-off, and reports module health
+   handshake, restarts a module that crashes or hangs with a back-off that grows steeply when it
+   keeps failing, kills a module whose `health` misses its deadline, and reports module health
    in the API. A module crash never affects ingest or recording; a test proves it.
 7. **[server] Feed the substream to a module.** Takes a camera's substream from the ring and sends
    it as access units. Uses the main stream when a camera has no substream and flags that in the
@@ -306,7 +479,8 @@ module on every change. Hardware modules run it on runners that have the hardwar
    per target, score each result on the target or its simulator, and publish the files with their
    sha256. A fetcher in the server downloads and checks them at first start.
 9. **[server] Benchmark the host.** Runs the benchmark per module and model, stores the results,
-   and runs again after an update of a module or a model.
+   and runs again after an update of a module or a model. Skips models that have a budget from the
+   module's hardware profile.
 10. **[server] The planner.** Chooses the step, rate, model and module per camera, watches the
     `stats`, steps down and up, and re-plans on changes. Exposes the chosen level per camera in
     the API.
@@ -319,8 +493,9 @@ module on every change. Hardware modules run it on runners that have the hardwar
 14. **[hardware] Intel module: Quick Sync decoding.** Hardware decoding of H.264 and H.265 for
     the substream. Falls back to software decoding per stream and says so in `stats`.
 15. **[hardware] Rockchip module.** The RKNN module from Cairn's Rockchip code: runtime loaded
-    with `dlopen` and fetched at first start, models compiled for the RK3566, software decoding to
-    start with. Passes the conformance kit on a Green once the driver is available.
+    with `dlopen` and fetched at first start, models compiled for the RK3566, its hardware profile
+    for the RK3566, software decoding to start with. Passes the conformance kit on a Green once
+    the driver is available.
 16. **[os] NPU driver on the Green.** Work out the route with the Home Assistant OS maintainers
     (home-assistant/operating-system#3089) and test the Rockchip module on it. Tracking issue.
 17. **[frontend] Detection status in the interface.** Per camera: what the box does now
@@ -329,6 +504,9 @@ module on every change. Hardware modules run it on runners that have the hardwar
     to `person`, `pet` or `vehicle`, with the fine class kept next to it, and tests.
 19. **[documentation] How to write a module.** The contract, the conformance kit, model builds and
     how a module is released.
+20. **[hardware] Measure the cost of the process boundary.** On a Home Assistant Green and on an
+    x86 host: memory and CPU of a module as a process, compared with the same module linked into a
+    test binary, and what a crash costs in each form. Answers open question 12.
 
 ## Order
 
@@ -342,6 +520,7 @@ module on every change. Hardware modules run it on runners that have the hardwar
 - Steps 13 and 14 need step 4. Step 15 needs step 4 and, to finish, step 16.
 - Step 17 needs step 10 and the panel. Step 18 stands alone and is used by step 12. Step 19
   follows steps 1, 3 and 8.
+- Step 20 needs steps 5 and 6.
 
 ## Open questions
 
@@ -372,6 +551,11 @@ module on every change. Hardware modules run it on runners that have the hardwar
     has to be measured on a Green.
 11. **Runners with hardware.** Who hosts CI runners with an Intel host and a Green, so that hardware
     modules run the kit on every release?
+12. **Linking a module into the server.** The `Detector` trait allows it. It saves the copy of the
+    substream and the base memory of a second process. But then a vendor library that aborts or a
+    native call that hangs stops recordings, the server links FFmpeg and vendor runtimes, and each
+    board family ships its own build of the whole server. Step 20 decides it; until then every
+    module is a process.
 
 ## Later, and what this must not block
 
