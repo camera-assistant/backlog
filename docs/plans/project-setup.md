@@ -142,7 +142,7 @@ The backlog repository gets an `AGENTS.md` too. It describes the plan format (th
 
 ### Issue and pull request templates
 
-- **Server and frontend**, shared from the `.github` repository: a bug report form (version, how it is installed, hardware, camera brand and model and how it connects, what happened, logs). Ideas and feature requests are sent to the backlog as an issue. Blank issues are off, so a report always has the fields.
+- **Server and frontend**, shared from the `.github` repository: a bug report form (version, how it is installed, hardware, camera brand and model and how it connects, what happened, logs). Ideas, feature requests and questions are sent to the discussions of the backlog repository. Blank issues are off, so a report always has the fields.
 - **Backlog:** templates for Epic, Feature and Task, with the same sections as the epic files: Problem, What we build, Challenges, Asks to others, and a checklist.
 - **Pull requests:** what changed and why, the linked issue, and a short checklist: tests added, docs updated, no new dependency outside the licence rules, schema version changed if the API changed.
 - **Labels and fields** in the backlog and on the board: the labels `bug`, `feature`, `enhancement`, `chore`, `frontend`, `server`, `hardware`, `hass-integration`, `matter`, `Needs UX Design`, `help wanted`, `good first issue`; the issue types Epic, Feature, Task and Bug; the board fields Priority, Size and Area; the milestones Preview, MVP and AVP for the phase.
