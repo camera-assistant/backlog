@@ -117,7 +117,7 @@ Assistant Supervisor.
 | A stream stalls without an error | Footage until the stall is noticed | The watchdog sees no progress; ingest tears the session down and reconnects (ingest plan). |
 | A camera task panics | That camera, for a moment | The task supervisor starts it again after a back-off. Other cameras are untouched. |
 | A detection module crashes | Detections | The server restarts it with a back-off. Recording and the camera's own events carry on (detection plan). |
-| A detection module hangs | Detections | Its health misses its deadline, and the server kills and restarts it (detection plan). |
+| A detection module hangs | Detections | Its health reports a hung call or stops arriving, and the server kills and restarts it (detection plan). |
 | The async runtime is blocked | Footage until the restart | The watchdog thread ends the process; the container's restart policy or the app watchdog starts it again. |
 | A disk fills up | The oldest unprotected footage | Emergency cleanup deletes it. From the MVP, Home Assistant shows a repair (recorder plan). |
 | A copy location goes offline | Nothing | Its copy queue waits until it is back (storage plan). |

@@ -123,8 +123,8 @@ The module host runs one chain per stream:
 
 A board supplies decode and scale (one stage, on its own decoder and scaler where it has them) and
 the inference backend. The module host and the engine crates supply the rest: the contract, the
-chain, the sample gate, the motion check, decoding model outputs into boxes, fetching files, the
-canary and health.
+chain, the sample gate, the motion check, decoding model outputs into boxes, the canary and
+health.
 
 The sketches below show the shape, not final signatures. `Board` and `DecodeStage` live in the
 module host crate; `Backend` and `Provider` live in the engine crates. They come from Cairn's
@@ -147,7 +147,7 @@ pub trait Board: Send + Sync + 'static {
     /// Hardware profiles: per chip, a ladder of models with a measured budget each.
     fn profiles(&self) -> &[HardwareProfile];
 
-    /// Files to fetch at first start, each pinned by sha256.
+    /// Files this board needs at first start, each pinned by sha256. The server fetches them.
     fn artifacts(&self) -> Vec<Artifact>;
 
     /// What cannot work on this host, and why, before any stream opens.
@@ -196,7 +196,8 @@ Besides the chain, the module host:
 - **Loads a model first in a short-lived child process (a canary),** because a vendor runtime can
   abort the whole process on a bad model file. Only a model that loaded there is opened in the
   module.
-- **Fetches its files** at first start, as "Models" describes.
+- **Lists the files it needs,** each with its sha256: models, and a vendor's runtime where it
+  may not be shipped. The server fetches and checks them (see "Models").
 - **Reports health** (see "Health and restarts").
 
 ### The contract, version 1
@@ -206,7 +207,7 @@ Messages over a Unix socket. The exact encoding is an open question. The shapes:
 | Message | Direction | Content |
 |---|---|---|
 | `hello` | module → server | contract version, module name and version |
-| `probe` / `probe_result` | both | devices found, decoders available (codec, maximum size), models it can run, why something is not available; per model, an optional measured budget from the module's hardware profile |
+| `probe` / `probe_result` | both | devices found, decoders available (codec, maximum size), models it can run, why something is not available; per model, an optional measured budget from the module's hardware profile; the files it needs, each with its sha256 |
 | `benchmark` / `benchmark_result` | both | for one model: passes per second sustained, latency p50 and p95, measured on a reference clip |
 | `open_stream` | server → module | stream id, codec (H.264 or H.265), codec parameters, picture size, the model to use |
 | `access_unit` | server → module | stream id, timestamp, keyframe flag, bytes |
@@ -215,7 +216,7 @@ Messages over a Unix socket. The exact encoding is an open question. The shapes:
 | `motion` | module → server | stream id, timestamp, active or not, changed area |
 | `detections` | module → server | stream id, timestamp of the frame, list of `{label, score, box}` with the box in coordinates from 0 to 1 |
 | `stats` | module → server | per stream: frames decoded, passes run, frames dropped, queue length, latency |
-| `health` | module → server | `healthy`, `degraded` or `wedged`, with timings, from a timed probe pass; `degraded` means the accelerator answers at the speed of the CPU baseline |
+| `health` | module → server | `healthy`, `degraded` or `wedged`, with the time of completed model passes and, per stream, the age of its outstanding call; `degraded` means passes run at the speed of the CPU baseline, `wedged` means a call ran past its deadline |
 | `close_stream` | server → module | stream id |
 
 Rules:
@@ -252,13 +253,22 @@ pub trait Detector: Send {
 
 ### Health and restarts
 
-A module runs a timed probe pass at a fixed interval and sends the result as `health`. It compares
-the time per pass with a CPU baseline, so an accelerator that has fallen back to the speed of the
-CPU is reported as `degraded` and never mistaken for a busy one. The planner plans without a
-module that is `degraded` or `wedged`, and health tells the person why.
+The module host sends `health` at a fixed interval. It rests on two measurements:
+
+- **The time of completed model passes,** without the time a frame waited in the module's queue,
+  compared with a CPU baseline. An accelerator whose passes are not clearly faster than the CPU
+  has fallen back to it and is `degraded`. A busy accelerator still completes its passes at
+  accelerator speed, so load alone never makes a module `degraded`; the planner sees load in
+  `stats`. With too few passes in an interval there is no verdict.
+- **The age of each stream's outstanding decode or inference call.** A call that runs past its
+  deadline makes the module `wedged`, also while its other streams still complete passes.
+
+The planner plans without a module that is `degraded` or `wedged`, and health tells the person
+why.
 
 The module supervisor in the server restarts a module that crashes, and kills and restarts one
-whose `health` misses its deadline. When a module keeps failing, the back-off grows steeply.
+that is `wedged` or whose `health` does not arrive in time. When a module keeps failing, the
+back-off grows steeply.
 Every restart opens new sessions on the accelerator, and a runtime can keep state of old sessions
 that only a reboot clears: Cairn's export tools for the QCS6490 class reboot the board after a
 fixed number of sessions for that reason. So a restart does not always bring an accelerator back.
@@ -329,7 +339,8 @@ logic, which builds events with a start, an end and labels. Tier 1 runs no track
 - An NPU needs the model compiled per chip, with a fixed input size and 8-bit weights. The CPU and
   OpenVINO run ONNX directly.
 - Every model file is built in CI, scored against a reference set, and published with a sha256.
-  The server or the module fetches it at first start and checks the hash.
+  The server fetches it at first start and checks the hash. A module lists the files it needs in
+  `probe_result`.
 
 Model families that cannot be used, and why:
 
@@ -412,7 +423,7 @@ Paths are in https://github.com/bbangert/cairn-nvr unless the row says otherwise
 | The Qualcomm backend (QNN through ONNX Runtime, in `plugins/cairn-detect/src/infer/backend/onnxruntime.rs`) and V4L2 decoding | `camera-assistant-qualcomm` |
 | Hardware profiles (`priv/profiles/generic/qcs6490-tier1.yml`; `priv/profiles/rk3566-tier1.yml` in cairn-rockchip) | The repository of each board family |
 | Export and verification tools (`tools/qdq-export`, `tools/board-bench`, `tools/board-soak`, `plugins/cairn-detect/verify`; `tools/rknn-export` in cairn-rockchip) | The model builds step and the conformance kit |
-| Behaviour that Cairn has in Elixir: the picker (`lib/cairn/pipeline/picker.ex`), the sample gate (`Cairn.Stage.SampleGate`), ladder selection (`lib/cairn/config.ex`), fetching files (`lib/cairn/artifacts.ex`), health and the canary (`lib/cairn/native/health.ex`, `canary.ex`) | Written again in Rust: ladder selection in the server's planner, the rest in the module host crate |
+| Behaviour that Cairn has in Elixir: the picker (`lib/cairn/pipeline/picker.ex`), the sample gate (`Cairn.Stage.SampleGate`), ladder selection (`lib/cairn/config.ex`), fetching files (`lib/cairn/artifacts.ex`), health and the canary (`lib/cairn/native/health.ex`, `canary.ex`) | Written again in Rust: ladder selection and fetching files in the server, the rest in the module host crate |
 
 Of the model catalog, the server only picks families that the "Models" section allows.
 
@@ -465,19 +476,21 @@ Does not come along:
 4. **[server] The module host.** A shared crate that every module uses: the socket, the
    handshake, one pipeline per stream (decode, scale, motion check, inference), dropping to the
    next keyframe when behind, and `stats`. The `Board` and `DecodeStage` traits, the canary for
-   model loads, and `health` from a timed probe pass.
+   model loads, and `health` from the time of completed passes and the age of outstanding calls.
 5. **[server] The CPU module.** Software decoding, ONNX Runtime on the CPU, the YOLOX ladder.
    Passes the conformance kit in CI on x86-64 and aarch64.
 6. **[server] The module supervisor.** Finds the installed modules, starts them, runs the
    handshake, restarts a module that crashes or hangs with a back-off that grows steeply when it
-   keeps failing, kills a module whose `health` misses its deadline, and reports module health
+   keeps failing, kills a module that is `wedged` or whose `health` does not arrive in time, and
+   reports module health
    in the API. A module crash never affects ingest or recording; a test proves it.
 7. **[server] Feed the substream to a module.** Takes a camera's substream from the ring and sends
    it as access units. Uses the main stream when a camera has no substream and flags that in the
    camera's health. Never blocks ingest.
 8. **[CI / tooling] Model builds.** Export YOLOX nano, tiny and small to ONNX, quantise, compile
    per target, score each result on the target or its simulator, and publish the files with their
-   sha256. A fetcher in the server downloads and checks them at first start.
+   sha256. A fetcher in the server downloads and checks them, and the other files a module lists, at
+   first start.
 9. **[server] Benchmark the host.** Runs the benchmark per module and model, stores the results,
    and runs again after an update of a module or a model. Skips models that have a budget from the
    module's hardware profile.
