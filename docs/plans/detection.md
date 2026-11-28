@@ -517,8 +517,8 @@ Does not come along:
     the substream. Falls back to software decoding per stream and says so in `stats`.
 15. **[hardware] Rockchip module.** The RKNN module from Cairn's Rockchip code: runtime loaded
     with `dlopen` and fetched at first start, models compiled for the RK3566, its hardware profile
-    for the RK3566 with budgets measured on this module, software decoding to start with. Passes the conformance kit on a Green once
-    the driver is available.
+    for the RK3566 with budgets measured on this module, software decoding to start with. Passes
+    the conformance kit on a Green once the driver is available.
 16. **[os] NPU driver on the Green.** Work out the route with the Home Assistant OS maintainers
     (home-assistant/operating-system#3089) and test the Rockchip module on it. Tracking issue.
 17. **[frontend] Detection status in the interface.** Per camera: what the box does now
